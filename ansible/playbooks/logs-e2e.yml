@@ -1,0 +1,52 @@
+---
+# End-to-end проверка логов (make logs-e2e): запрос с уникальной меткой в URL попадает в
+# JSON access-лог nginx -> Promtail -> Loki -> запрос LogQL через datasource Grafana.
+- name: Записать тестовую строку в лог nginx
+  hosts: app
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/app.yml
+  tasks:
+    - name: Придумать уникальную метку
+      ansible.builtin.set_fact:
+        logs_e2e_marker: "e2e-{{ lookup('ansible.builtin.pipe', 'date +%s%N') }}"
+
+    - name: Запрос с меткой к приложению через nginx
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/e2e-log-check/{{ logs_e2e_marker }}"
+        status_code: [200, 404]
+
+    - name: Метка записи
+      ansible.builtin.debug:
+        msg: "Метка: {{ logs_e2e_marker }} — ищем её в Loki"
+
+- name: Найти тестовую строку в Loki через Grafana
+  hosts: monitoring
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/monitoring.yml
+  vars:
+    logs_e2e_marker: "{{ hostvars[groups['app'][0]].logs_e2e_marker }}"
+    logs_e2e_query: '{job="nginx", log_type="access"} |= "{{ logs_e2e_marker }}"'
+  tasks:
+    # Тот же путь, что у панели Grafana: datasource Loki -> /loki/api/v1/query_range
+    - name: Запрос LogQL через datasource Loki в Grafana
+      ansible.builtin.uri:
+        url: >-
+          http://127.0.0.1:{{ grafana_port }}/api/datasources/proxy/uid/loki/loki/api/v1/query_range?limit=10&query={{ logs_e2e_query | urlencode }}
+        user: "{{ grafana_admin_user }}"
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+      register: logs_e2e_result
+      until: logs_e2e_result.json.data.result | default([]) | length > 0
+      retries: 20
+      delay: 3
+
+    - name: Найденная запись
+      ansible.builtin.debug:
+        msg:
+          query: "{{ logs_e2e_query }}"
+          labels: "{{ logs_e2e_result.json.data.result[0].stream }}"
+          line: "{{ logs_e2e_result.json.data.result[0]['values'][0][1] }}"

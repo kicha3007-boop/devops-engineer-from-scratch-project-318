@@ -1,0 +1,47 @@
+---
+# ВМ мониторинга (группа monitoring): Docker, ufw, Node Exporter и контейнеры
+# Prometheus, Loki и Grafana в docker-сети monitoring.
+#   make deploy-monitoring               — эта ВМ целиком
+#   make dashboards                      — только дашборды, datasource'ы и алерты Grafana
+- name: Развернуть ВМ мониторинга
+  hosts: monitoring
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/monitoring.yml
+
+  pre_tasks:
+    - name: Собрать список установленных пакетов
+      ansible.builtin.package_facts:
+      tags: [always]
+
+    - name: Проверить, что секреты из Ansible Vault подключены
+      ansible.builtin.assert:
+        that:
+          - grafana_admin_password | length > 0
+          - grafana_smtp_password | length > 0
+          - groups['app'] | map('extract', hostvars, 'private_ip') | select | list | length == groups['app'] | length
+        fail_msg: >-
+          Не заданы секреты: нужен group_vars/all/vault.yml в каталоге инвентаря
+          (шаблон — ansible/inventories/vault.yml.example) и файл пароля .vault_pass, см. README.
+        quiet: true
+      when: not ansible_check_mode
+      tags: [always]
+
+  roles:
+    - role: common
+      tags: [server, common]
+    - role: geerlingguy.docker
+      tags: [server, docker]
+    - role: docker_access
+      tags: [server, docker]
+    - role: firewall
+      tags: [server, firewall]
+    - role: node_exporter
+      tags: [agents, node_exporter]
+    - role: loki
+      tags: [loki]
+    - role: prometheus
+      tags: [prometheus]
+    - role: grafana
+      tags: [grafana]

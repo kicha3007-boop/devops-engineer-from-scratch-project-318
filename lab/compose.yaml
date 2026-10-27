@@ -1,0 +1,161 @@
+# Локальный стенд вместо облака (make lab-up). Всё с префиксом p318, порты хоста — 38xxx,
+# только на 127.0.0.1. Сеть p318-lab 10.38.0.0/24 играет роль приватной сети между ВМ.
+#   app        — «ВМ» приложения: Ubuntu 24.04 + systemd + sshd (её настраивает playbooks/app.yml)
+#   monitoring — «ВМ» мониторинга: тот же образ (её настраивает playbooks/monitoring.yml)
+#   minio      — S3-совместимое хранилище вместо Yandex Object Storage
+#   mailpit    — SMTP-ловушка вместо почтового сервера: сюда Grafana шлёт письма алертов
+#   renderer   — grafana-image-renderer: PNG дашбордов и страниц для assets/ (make lab-screenshots)
+#   toolbox    — Ansible, ansible-lint, Terraform, mc для команд из Makefile
+name: p318
+
+x-vm: &vm
+  build:
+    context: ./vm
+  image: p318-vm:local
+  privileged: true
+  cgroup: private
+  tmpfs:
+    - /run
+    - /run/lock
+    - /tmp
+
+services:
+  app:
+    <<: *vm
+    container_name: p318-app
+    hostname: app-1
+    volumes:
+      # Docker внутри «ВМ» хранит данные на томах, а не в overlay-файловой системе контейнера
+      - p318-app-docker:/var/lib/docker
+      - p318-app-containerd:/var/lib/containerd
+      - p318-lab-ssh:/lab-ssh:ro
+    ports:
+      - "127.0.0.1:38080:80"
+    networks:
+      lab:
+        ipv4_address: 10.38.0.10
+
+  monitoring:
+    <<: *vm
+    container_name: p318-monitoring
+    hostname: monitoring-1
+    volumes:
+      - p318-monitoring-docker:/var/lib/docker
+      - p318-monitoring-containerd:/var/lib/containerd
+      - p318-lab-ssh:/lab-ssh:ro
+    ports:
+      - "127.0.0.1:38030:3000"
+      - "127.0.0.1:38090:9090"
+      - "127.0.0.1:38100:3100"
+    networks:
+      lab:
+        ipv4_address: 10.38.0.20
+
+  minio:
+    image: mirror.gcr.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    container_name: p318-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    env_file:
+      - path: ./minio.env
+        required: false
+    environment:
+      # Разрешает адреса вида bucket.s3.p318.test (virtual-hosted style, как в облаке)
+      MINIO_DOMAIN: s3.p318.test
+    volumes:
+      - p318-minio-data:/data
+    ports:
+      - "127.0.0.1:38901:9001"
+    networks:
+      lab:
+        ipv4_address: 10.38.0.30
+        aliases:
+          - s3.p318.test
+          - bulletins.s3.p318.test
+
+  mailpit:
+    image: mirror.gcr.io/axllent/mailpit:v1.32.0
+    container_name: p318-mailpit
+    environment:
+      # SMTP как у настоящего почтового сервера: обязательный STARTTLS (самоподписанный
+      # сертификат для mailpit.p318.test) и вход по паролю — Grafana передаёт его из Vault.
+      # Mailpit принимает любой логин и пароль.
+      MP_SMTP_TLS_CERT: sans:mailpit.p318.test
+      MP_SMTP_TLS_KEY: sans:mailpit.p318.test
+      MP_SMTP_REQUIRE_STARTTLS: "1"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "127.0.0.1:38025:8025"
+    networks:
+      lab:
+        ipv4_address: 10.38.0.40
+        aliases:
+          - mailpit.p318.test
+
+  renderer:
+    image: mirror.gcr.io/grafana/grafana-image-renderer:v5.12.9
+    container_name: p318-renderer
+    command: ["server"]
+    environment:
+      API_DEFAULT_ENCODING: png
+      # Дашборд логов с запросами к Loki готовится дольше 30 секунд по умолчанию
+      BROWSER_READINESS_TIMEOUT: 90s
+    env_file:
+      - path: ./renderer.env
+        required: false
+    networks:
+      lab:
+        ipv4_address: 10.38.0.50
+        aliases:
+          - renderer.p318.test
+
+  toolbox:
+    build:
+      context: ./toolbox
+    image: p318-toolbox:local
+    profiles: [tools]
+    working_dir: /work/ansible
+    environment:
+      # Авторизация Terraform в Yandex Cloud передаётся из окружения хоста
+      - YC_TOKEN
+      - YC_CLOUD_ID
+      - YC_SERVICE_ACCOUNT_KEY_FILE
+      - TF_VAR_db_password
+      # Провайдеры Terraform (сотни МБ) — в томе, а не в папке хоста
+      - TF_DATA_DIR=/tf-data
+    volumes:
+      - ..:/work
+      - p318-lab-ssh:/lab-ssh
+      - p318-ansible:/root/.ansible
+      - p318-terraform:/tf-data
+      # Ключи для настоящих ВМ: make deploy SSH_KEYS_DIR=~/.ssh
+      - ${SSH_KEYS_DIR:-./ssh-keys}:/ssh-host:ro
+    networks:
+      - lab
+
+networks:
+  lab:
+    name: p318-lab
+    ipam:
+      config:
+        - subnet: 10.38.0.0/24
+          # Динамические адреса (toolbox) — из верхней половины, статические ВМ — из нижней
+          ip_range: 10.38.0.128/25
+
+volumes:
+  p318-app-docker:
+    name: p318-app-docker
+  p318-app-containerd:
+    name: p318-app-containerd
+  p318-monitoring-docker:
+    name: p318-monitoring-docker
+  p318-monitoring-containerd:
+    name: p318-monitoring-containerd
+  p318-lab-ssh:
+    name: p318-lab-ssh
+  p318-ansible:
+    name: p318-ansible
+  p318-minio-data:
+    name: p318-minio-data
+  p318-terraform:
+    name: p318-terraform

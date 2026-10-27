@@ -1,0 +1,27 @@
+---
+- name: Повторять загрузку пакетов при сбоях зеркала
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/80-retries
+    content: 'Acquire::Retries "5";'
+    owner: root
+    group: root
+    mode: "0644"
+
+# Индекс пакетов обновляется и в режиме --check: установленное на сервере это не меняет,
+# зато сухой прогон видит актуальные версии пакетов.
+# Без cache_valid_time: в образах, где списки apt удалены, а метка обновления осталась,
+# модуль считал бы кеш свежим и не находил пакеты
+- name: Обновить индекс пакетов apt
+  ansible.builtin.apt:
+    update_cache: true
+  check_mode: false
+  changed_when: false
+
+- name: Установить базовые пакеты
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+  register: common_apt
+  until: common_apt is succeeded
+  retries: 3
+  delay: 10

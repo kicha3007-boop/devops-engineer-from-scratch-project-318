@@ -1,0 +1,8 @@
+---
+# Пользователь, от имени которого обслуживают контейнеры без sudo
+docker_access_deploy_user: deploy
+
+# Кто попадает в группу docker: сервисный пользователь и тот, под кем заходит Ansible
+docker_access_users:
+  - "{{ docker_access_deploy_user }}"
+  - "{{ ansible_user | default(ansible_facts.user_id) }}"

@@ -1,0 +1,21 @@
+---
+- name: Создать сервисного пользователя для работы с контейнерами
+  ansible.builtin.user:
+    name: "{{ docker_access_deploy_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Прочитать список групп
+  ansible.builtin.getent:
+    database: group
+
+# Группа docker появляется вместе с пакетом docker-ce. В режиме --check на чистом
+# сервере пакета ещё нет — тогда шаг пропускается, а не падает.
+- name: Добавить пользователей в группу docker (запуск контейнеров без sudo)
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_access_users | unique }}"
+  when: "'docker' in ansible_facts.getent_group"

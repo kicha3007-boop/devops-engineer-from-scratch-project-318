@@ -1,0 +1,34 @@
+---
+# Шаблон секретов облачного окружения. Создать зашифрованный файл:
+#   cp ansible/inventories/vault.yml.example ansible/inventories/production/group_vars/all/vault.yml
+#   (подставить значения)
+#   make vault-encrypt          # зашифровать; править потом: make vault-edit
+# Пароль от Vault — в файле .vault_pass в корне репозитория (в git не попадает).
+
+# Пользователь из cloud-init и адреса ВМ: terraform output
+vault_server_user: ubuntu
+vault_app_public_ip: 203.0.113.10
+vault_app_private_ip: 10.10.0.10
+vault_monitoring_public_ip: 203.0.113.20
+vault_monitoring_private_ip: 10.10.0.20
+# Кому открыты Grafana (3000) и Prometheus (9090): свой IP/32
+vault_admin_cidrs:
+  - 198.51.100.7/32
+
+# Managed PostgreSQL: terraform output db_host, пароль — тот же, что TF_VAR_db_password
+vault_db_host: c-xxxxxxxx.rw.mdb.yandexcloud.net
+vault_postgres_password: change-me
+
+# Статический ключ сервисного аккаунта для бакета: terraform output (см. README)
+vault_s3_access_key: YCAJ...
+vault_s3_secret_key: YCP...
+
+# Grafana: пароль admin и почта алертов (пароль приложения Яндекс Почты)
+vault_grafana_admin_password: change-me
+vault_smtp_user: alerts@yandex.ru
+vault_smtp_password: app-password
+vault_alert_email_to: ops@example.ru
+
+# Только если пакет в GHCR приватный: логин GitHub и токен с правом read:packages
+vault_app_registry_username: ""
+vault_app_registry_password: ""

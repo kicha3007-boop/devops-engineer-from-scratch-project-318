@@ -1,0 +1,22 @@
+---
+# Promtail в Docker-контейнере на ВМ приложения: читает JSON-логи nginx и логи
+# контейнеров (stdout) и отправляет их в Loki на ВМ мониторинга.
+promtail_image: grafana/promtail:3.6.11
+promtail_container_name: promtail
+promtail_root: /opt/promtail
+promtail_positions_volume: promtail-positions
+promtail_loki_push_url: http://127.0.0.1:3100/loki/api/v1/push
+
+# Общие лейблы всех записей
+promtail_labels:
+  env: "{{ env_name | default('production') }}"
+  app: "{{ project_name | default('bulletins') }}"
+  host: "{{ inventory_hostname }}"
+
+# Файлы nginx — только логи сайта приложения, не весь /var/log
+promtail_nginx_access_log: "{{ nginx_access_log | default('/var/log/nginx/bulletins.access.log') }}"
+promtail_nginx_error_log: "{{ nginx_error_log | default('/var/log/nginx/bulletins.error.log') }}"
+# Контейнеры, чьи логи нужны, помечены меткой logging=promtail; job берётся из метки logging_job
+promtail_docker_label_filter: logging=promtail
+# job контейнера приложения: его JSON-логи разбираются (level, logger)
+promtail_app_job: "{{ app_logging_job | default('bulletins-app') }}"

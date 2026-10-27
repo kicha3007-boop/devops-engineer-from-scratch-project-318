@@ -1,0 +1,11 @@
+[Unit]
+Description=Lab: SSH key for user ubuntu
+Before=ssh.service ssh.socket
+ConditionPathExists=/lab-ssh/id_ed25519.pub
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lab-authorized-keys
+
+[Install]
+WantedBy=multi-user.target

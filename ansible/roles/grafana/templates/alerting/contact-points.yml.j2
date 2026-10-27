@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# Contact point: письма через SMTP (настройки сервера — переменные GF_SMTP_* в grafana.env,
+# пароль — из Ansible Vault). Получатель — grafana_alert_email_to.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: {{ grafana_contact_point }}
+    receivers:
+      - uid: {{ grafana_contact_point }}
+        type: email
+        settings:
+          addresses: {{ grafana_alert_email_to }}
+          singleEmail: true
+        disableResolveMessage: false

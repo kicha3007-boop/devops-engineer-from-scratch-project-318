@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+# Datasource'ы Grafana. uid фиксированы: на них ссылаются дашборды и правила алертинга.
+apiVersion: 1
+
+prune: true
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: {{ grafana_prometheus_url }}
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: {{ prometheus_scrape_interval | default('15s') }}
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: {{ grafana_loki_url }}
+    editable: false
+    jsonData:
+      maxLines: 1000

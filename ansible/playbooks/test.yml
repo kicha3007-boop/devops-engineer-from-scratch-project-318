@@ -1,0 +1,212 @@
+---
+# Smoke-тесты развёрнутых ВМ (make test): ничего не меняют, только проверяют.
+# ВМ app: systemd-сервисы, контейнеры, приложение через nginx, actuator, stub_status, экспортеры, ufw.
+# ВМ monitoring: контейнеры, promtool, все таргеты Prometheus up == 1, доступ к actuator ВМ app
+# по внутренней сети, Loki получает логи, datasource'ы, дашборды и алерты Grafana.
+- name: Проверить ВМ приложения
+  hosts: app
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/app.yml
+  vars:
+    test_app_services: [docker, nginx, node_exporter, nginx_exporter]
+    test_app_containers: "{{ ['bulletins-app', 'promtail'] + (['bulletins-db'] if postgres_enabled | bool else []) }}"
+  tasks:
+    - name: Собрать состояние systemd-сервисов
+      ansible.builtin.service_facts:
+
+    - name: Сервисы запущены и включены в автозапуск
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services[item ~ '.service'].state == 'running'
+          - ansible_facts.services[item ~ '.service'].status == 'enabled'
+        fail_msg: "{{ item }}: {{ ansible_facts.services[item ~ '.service'] | default('нет такого сервиса') }}"
+        success_msg: "{{ item }}: running, enabled"
+      loop: "{{ test_app_services }}"
+
+    - name: Прочитать состояние контейнеров
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: test_app_info
+      loop: "{{ test_app_containers }}"
+
+    - name: Контейнеры работают и перезапускаются сами
+      ansible.builtin.assert:
+        that:
+          - test_container.State.Running
+          - test_container.HostConfig.RestartPolicy.Name == 'unless-stopped'
+          - test_container.State.Health is not defined or test_container.State.Health.Status == 'healthy'
+        fail_msg: "{{ item }}: {{ test_container.State | default('контейнер не найден') }}"
+        success_msg: "{{ item }}: running{{ ', ' ~ test_container.State.Health.Status if test_container.State.Health is defined else '' }}"
+      vars:
+        test_container: "{{ test_app_info.results[test_index].container | default({}) }}"
+      loop: "{{ test_app_containers }}"
+      loop_control:
+        index_var: test_index
+
+    - name: Приложение отвечает через nginx (главная страница и REST)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1{{ item }}"
+      loop:
+        - /
+        - /api/bulletins?page=1&perPage=1
+
+    - name: Health приложения на management-порту
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_metrics_port }}/actuator/health"
+        return_content: true
+      register: test_app_health
+      failed_when: test_app_health.json.status | default('') != 'UP'
+
+    - name: Метрики приложения, nginx и узла
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        return_content: true
+      register: test_app_metrics
+      failed_when: item.expect not in test_app_metrics.content
+      loop:
+        - url: "http://127.0.0.1:{{ app_metrics_port }}/actuator/prometheus"
+          expect: http_server_requests_seconds_count
+        - url: "http://127.0.0.1:{{ app_metrics_port }}/stub_status"
+          expect: Active connections
+        - url: "http://127.0.0.1:{{ nginx_exporter_port }}/metrics"
+          expect: nginx_up 1
+        - url: "http://127.0.0.1:{{ node_exporter_port }}/metrics"
+          expect: node_load1
+      loop_control:
+        label: "{{ item.url }} -> {{ item.expect }}"
+
+    - name: Actuator закрыт на публичном порту 80
+      ansible.builtin.uri:
+        url: http://127.0.0.1/actuator/prometheus
+        status_code: 404
+
+    - name: Прочитать правила ufw
+      ansible.builtin.command: ufw status
+      register: test_app_ufw
+      changed_when: false
+      when: firewall_enabled | bool
+
+    - name: Ufw включён
+      ansible.builtin.assert:
+        that: "'Status: active' in test_app_ufw.stdout"
+        success_msg: "{{ test_app_ufw.stdout_lines }}"
+      when: firewall_enabled | bool
+
+- name: Проверить ВМ мониторинга
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/monitoring.yml
+  vars:
+    test_grafana_api: "http://127.0.0.1:{{ grafana_port }}/api"
+  tasks:
+    - name: Node Exporter запущен
+      ansible.builtin.systemd_service:
+        name: node_exporter
+      register: test_mon_node
+      failed_when: test_mon_node.status.ActiveState != 'active'
+
+    - name: Прочитать состояние контейнеров мониторинга
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: test_mon_info
+      loop: [prometheus, grafana, loki]
+
+    - name: Контейнеры Prometheus, Grafana и Loki работают
+      ansible.builtin.assert:
+        that:
+          - test_container.State.Running
+          - test_container.HostConfig.RestartPolicy.Name == 'unless-stopped'
+        fail_msg: "{{ item }}: {{ test_container.State | default('контейнер не найден') }}"
+        success_msg: "{{ item }}: running"
+      vars:
+        test_container: "{{ test_mon_info.results[test_index].container | default({}) }}"
+      loop: [prometheus, grafana, loki]
+      loop_control:
+        index_var: test_index
+
+    - name: Проверить конфигурацию Prometheus утилитой promtool
+      ansible.builtin.command: docker exec prometheus promtool check config /etc/prometheus/prometheus.yml
+      register: test_promtool
+      changed_when: false
+
+    - name: Вывод promtool
+      ansible.builtin.debug:
+        msg: "{{ (test_promtool.stdout_lines + test_promtool.stderr_lines) | select | list }}"
+
+    - name: Все таргеты Prometheus в состоянии up
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ prometheus_port }}/api/v1/targets?state=active"
+      register: test_targets
+      vars:
+        test_down: "{{ test_targets.json.data.activeTargets | rejectattr('health', 'equalto', 'up') | list }}"
+      until: test_down | length == 0
+      retries: 10
+      delay: 6
+      failed_when: test_down | length > 0
+
+    - name: Таргеты Prometheus
+      ansible.builtin.debug:
+        msg: >-
+          {{ test_targets.json.data.activeTargets
+             | map(attribute='labels')
+             | map(attribute='job')
+             | zip(test_targets.json.data.activeTargets | map(attribute='scrapeUrl'),
+                   test_targets.json.data.activeTargets | map(attribute='health'))
+             | map('join', ' ')
+             | list }}
+
+    - name: С ВМ мониторинга actuator ВМ приложения доступен по внутренней сети
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].private_ip }}:{{ app_metrics_port }}/actuator/health"
+      loop: "{{ groups['app'] }}"
+
+    - name: Loki готов и получает логи nginx и приложения
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ loki_port }}/loki/api/v1/label/job/values"
+      register: test_loki_jobs
+      until: "'nginx' in test_loki_jobs.json.data | default([]) and alert_app_job in test_loki_jobs.json.data | default([])"
+      retries: 10
+      delay: 6
+
+    - name: Grafana жива
+      ansible.builtin.uri:
+        url: "{{ test_grafana_api }}/health"
+
+    - name: Datasource'ы Prometheus и Loki отвечают
+      ansible.builtin.uri:
+        url: "{{ test_grafana_api }}/datasources/uid/{{ item }}/health"
+        user: "{{ grafana_admin_user }}"
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+      register: test_ds
+      failed_when: test_ds.json.status | default('') != 'OK'
+      loop: [prometheus, loki]
+
+    - name: Прочитать дашборды, правила алертинга и contact point
+      ansible.builtin.uri:
+        url: "{{ test_grafana_api }}/{{ item }}"
+        user: "{{ grafana_admin_user }}"
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+      register: test_grafana
+      loop:
+        - search?type=dash-db&tag=bulletins
+        - v1/provisioning/alert-rules
+        - v1/provisioning/contact-points
+
+    - name: Дашборды, алерты и contact point загружены из provisioning
+      ansible.builtin.assert:
+        that:
+          - test_grafana.results[0].json | length >= 5
+          - test_grafana.results[1].json | length >= 12
+          - test_grafana.results[2].json | selectattr('type', 'equalto', 'email') | list | length >= 1
+        success_msg: >-
+          дашборды: {{ test_grafana.results[0].json | map(attribute='title') | join(', ') }};
+          правил алертинга: {{ test_grafana.results[1].json | length }};
+          contact point: {{ test_grafana.results[2].json | map(attribute='name') | join(', ') }}

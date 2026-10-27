@@ -1,0 +1,165 @@
+# {{ ansible_managed }}
+# Правила Grafana Alerting. Каждое правило: запрос A (Prometheus или Loki) -> B (последнее
+# значение каждой серии, NaN отбрасываются) -> C (порог). Пороги и длительность (for) —
+# переменные из ansible/group_vars/monitoring.yml. Лейблы service и severity задают маршрут
+# уведомления; __dashboardUid__/__panelId__ связывают правило с панелью дашборда.
+{% set app = 'job="' ~ alert_app_job ~ '"' %}
+{% set env = 'env="' ~ env_name | default('production') ~ '"' %}
+{% set lb = '{{' %}
+{% set rb = '}}' %}
+{% set value = lb ~ ' printf "%.1f" $values.B.Value ' ~ rb %}
+{% set rules = [
+  {
+    'group': 'availability', 'uid': 'bulletins-app-down',
+    'title': 'Приложение недоступно',
+    'ds': 'prometheus', 'expr': 'max(up{' ~ app ~ '})',
+    'op': 'lt', 'threshold': 1, 'for': grafana_alert_for_critical, 'no_data': 'Alerting',
+    'service': alert_app_job, 'severity': 'critical',
+    'summary': 'Prometheus не может снять метрики приложения: контейнер упал или не отвечает',
+    'description': 'up{' ~ app ~ '} = 0 дольше ' ~ grafana_alert_for_critical ~ '. Проверьте: docker ps на ВМ app, curl http://<app>:' ~ app_metrics_port ~ '/actuator/health',
+    'dashboard': 'bulletins-app', 'panel': 1,
+  },
+  {
+    'group': 'availability', 'uid': 'target-down',
+    'title': 'Таргет Prometheus недоступен',
+    'ds': 'prometheus', 'expr': 'up{job!="' ~ alert_app_job ~ '"}',
+    'op': 'lt', 'threshold': 1, 'for': grafana_alert_for_critical, 'no_data': 'OK',
+    'service': 'monitoring', 'severity': 'critical',
+    'summary': 'Не отвечает ' ~ lb ~ ' $labels.job ' ~ rb ~ ' на ' ~ lb ~ ' $labels.instance ' ~ rb,
+    'description': 'Экспортер или сервис мониторинга не отдаёт метрики дольше ' ~ grafana_alert_for_critical,
+    'dashboard': 'bulletins-status', 'panel': 1,
+  },
+  {
+    'group': 'availability', 'uid': 'bulletins-no-metrics',
+    'title': 'Нет метрик приложения дольше ' ~ alert_no_data_minutes ~ ' минут',
+    'ds': 'prometheus', 'expr': 'absent_over_time(process_uptime_seconds{' ~ app ~ '}[' ~ alert_no_data_minutes ~ 'm])',
+    'op': 'gt', 'threshold': 0, 'for': '0s', 'no_data': 'OK',
+    'service': alert_app_job, 'severity': 'critical',
+    'summary': 'В Prometheus нет ни одной точки process_uptime_seconds за ' ~ alert_no_data_minutes ~ ' минут',
+    'description': 'Сбор метрик приложения остановился: проверьте таргет ' ~ alert_app_job ~ ' на странице /targets',
+    'dashboard': 'bulletins-app', 'panel': 2,
+  },
+  {
+    'group': 'availability', 'uid': 'nginx-down',
+    'title': 'Nginx не отдаёт stub_status',
+    'ds': 'prometheus', 'expr': 'nginx_up',
+    'op': 'lt', 'threshold': 1, 'for': grafana_alert_for_critical, 'no_data': 'Alerting',
+    'service': 'nginx', 'severity': 'critical',
+    'summary': 'nginx_up = 0 на ' ~ lb ~ ' $labels.host ' ~ rb ~ ': nginx остановлен или закрыт stub_status',
+    'description': 'nginx-prometheus-exporter не может прочитать stub_status',
+    'dashboard': 'bulletins-nginx', 'panel': 1,
+  },
+  {
+    'group': 'application', 'uid': 'bulletins-5xx',
+    'title': 'Рост ответов 5xx приложения',
+    'ds': 'prometheus',
+    'expr': '(sum(rate(http_server_requests_seconds_count{' ~ app ~ ',status=~"5.."}[5m])) / sum(rate(http_server_requests_seconds_count{' ~ app ~ '}[5m])) * 100) and (sum(rate(http_server_requests_seconds_count{' ~ app ~ ',status=~"5.."}[5m])) > ' ~ alert_5xx_min_rps ~ ')',
+    'op': 'gt', 'threshold': alert_5xx_ratio_percent, 'for': grafana_alert_for_critical, 'no_data': 'OK',
+    'service': alert_app_job, 'severity': 'critical',
+    'summary': 'Доля ответов 5xx: ' ~ value ~ '% (порог ' ~ alert_5xx_ratio_percent ~ '%)',
+    'description': 'По метрике http_server_requests_seconds_count{status=~"5.."} за 5 минут',
+    'dashboard': 'bulletins-app', 'panel': 4,
+  },
+  {
+    'group': 'application', 'uid': 'bulletins-latency',
+    'title': 'Медленные ответы приложения (p95)',
+    'ds': 'prometheus',
+    'expr': 'histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{' ~ app ~ ',uri!~"/actuator.*"}[5m])))',
+    'op': 'gt', 'threshold': alert_latency_p95_seconds, 'for': grafana_alert_for_warning, 'no_data': 'OK',
+    'service': alert_app_job, 'severity': 'warning',
+    'summary': 'p95 времени ответа ' ~ value ~ ' с (порог ' ~ alert_latency_p95_seconds ~ ' с)',
+    'description': 'По гистограмме http_server_requests_seconds_bucket за 5 минут',
+    'dashboard': 'bulletins-app', 'panel': 5,
+  },
+  {
+    'group': 'application', 'uid': 'bulletins-error-logs',
+    'title': 'Ошибки в логах приложения',
+    'ds': 'prometheus',
+    'expr': 'sum(increase(logback_events_total{' ~ app ~ ',level="error"}[5m]))',
+    'op': 'gt', 'threshold': alert_app_errors_5m, 'for': '0s', 'no_data': 'OK',
+    'service': alert_app_job, 'severity': 'warning',
+    'summary': value ~ ' событий ERROR за 5 минут (порог ' ~ alert_app_errors_5m ~ ')',
+    'description': 'Метрика logback_events_total; сами записи — дашборд «Логи»',
+    'dashboard': 'bulletins-app', 'panel': 8,
+  },
+  {
+    'group': 'application', 'uid': 'bulletins-db-pool',
+    'title': 'Пул соединений с БД исчерпан',
+    'ds': 'prometheus',
+    'expr': 'max(hikaricp_connections_active{' ~ app ~ '} / hikaricp_connections_max{' ~ app ~ '}) * 100',
+    'op': 'gt', 'threshold': alert_db_pool_percent, 'for': grafana_alert_for_warning, 'no_data': 'OK',
+    'service': alert_app_job, 'severity': 'warning',
+    'summary': 'Пул HikariCP занят на ' ~ value ~ '%',
+    'description': 'hikaricp_connections_active / hikaricp_connections_max',
+    'dashboard': 'bulletins-app', 'panel': 10,
+  },
+  {
+    'group': 'logs', 'uid': 'nginx-5xx-logs',
+    'title': 'Всплеск 5xx в логах nginx',
+    'ds': 'loki',
+    'expr': 'sum(count_over_time({job="nginx", log_type="access", ' ~ env ~ '} | json | status >= 500 [5m]))',
+    'op': 'gt', 'threshold': alert_5xx_log_lines, 'for': grafana_alert_for_critical, 'no_data': 'OK',
+    'service': 'nginx', 'severity': 'critical',
+    'summary': value ~ ' ответов 5xx в access-логе nginx за 5 минут (порог ' ~ alert_5xx_log_lines ~ ')',
+    'description': 'LogQL по Loki: {job="nginx", log_type="access"} | json | status >= 500',
+    'dashboard': 'bulletins-logs', 'panel': 1,
+  },
+  {
+    'group': 'host', 'uid': 'host-cpu',
+    'title': 'Высокая загрузка CPU',
+    'ds': 'prometheus',
+    'expr': '100 - avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100',
+    'op': 'gt', 'threshold': alert_cpu_percent, 'for': grafana_alert_for_warning, 'no_data': 'OK',
+    'service': 'host', 'severity': 'warning',
+    'summary': 'CPU ' ~ lb ~ ' $labels.host ' ~ rb ~ ': ' ~ value ~ '%',
+    'description': 'Загрузка CPU выше ' ~ alert_cpu_percent ~ '% дольше ' ~ grafana_alert_for_warning,
+    'dashboard': 'bulletins-node', 'panel': 1,
+  },
+  {
+    'group': 'host', 'uid': 'host-memory',
+    'title': 'Мало свободной памяти',
+    'ds': 'prometheus',
+    'expr': '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100',
+    'op': 'gt', 'threshold': alert_memory_percent, 'for': grafana_alert_for_warning, 'no_data': 'OK',
+    'service': 'host', 'severity': 'warning',
+    'summary': 'Память ' ~ lb ~ ' $labels.host ' ~ rb ~ ' занята на ' ~ value ~ '%',
+    'description': 'Занято больше ' ~ alert_memory_percent ~ '% памяти дольше ' ~ grafana_alert_for_warning,
+    'dashboard': 'bulletins-node', 'panel': 3,
+  },
+  {
+    'group': 'host', 'uid': 'host-disk',
+    'title': 'Заканчивается место на диске',
+    'ds': 'prometheus',
+    'expr': '(1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100',
+    'op': 'gt', 'threshold': alert_disk_percent, 'for': grafana_alert_for_warning, 'no_data': 'OK',
+    'service': 'host', 'severity': 'warning',
+    'summary': 'Диск / на ' ~ lb ~ ' $labels.host ' ~ rb ~ ' заполнен на ' ~ value ~ '%',
+    'description': 'Занято больше ' ~ alert_disk_percent ~ '% корневой файловой системы',
+    'dashboard': 'bulletins-node', 'panel': 4,
+  },
+] %}
+{% set ns = namespace(groups=[]) %}
+{% for group_name in rules | map(attribute='group') | unique %}
+{%   set ns_rules = namespace(items=[]) %}
+{%   for r in rules | selectattr('group', 'equalto', group_name) %}
+{%     set query = {'refId': 'A', 'expr': r.expr, 'instant': true, 'range': false, 'intervalMs': 1000, 'maxDataPoints': 43200} if r.ds == 'prometheus' else {'refId': 'A', 'expr': r.expr, 'queryType': 'instant'} %}
+{%     set ns_rules.items = ns_rules.items + [{
+         'uid': r.uid,
+         'title': r.title,
+         'condition': 'C',
+         'data': [
+           {'refId': 'A', 'relativeTimeRange': {'from': 600, 'to': 0}, 'datasourceUid': r.ds, 'model': query},
+           {'refId': 'B', 'datasourceUid': '__expr__', 'model': {'refId': 'B', 'type': 'reduce', 'expression': 'A', 'reducer': 'last', 'settings': {'mode': 'dropNN'}}},
+           {'refId': 'C', 'datasourceUid': '__expr__', 'model': {'refId': 'C', 'type': 'threshold', 'expression': 'B', 'conditions': [{'evaluator': {'type': r.op, 'params': [r.threshold | float]}}]}},
+         ],
+         'noDataState': r.no_data,
+         'execErrState': 'Error',
+         'for': r.for,
+         'labels': {'service': r.service, 'severity': r.severity},
+         'annotations': {'summary': r.summary, 'description': r.description, '__dashboardUid__': r.dashboard, '__panelId__': r.panel | string},
+         'isPaused': false,
+       }] %}
+{%   endfor %}
+{%   set ns.groups = ns.groups + [{'orgId': 1, 'name': group_name, 'folder': grafana_alert_folder, 'interval': grafana_alert_interval, 'rules': ns_rules.items}] %}
+{% endfor %}
+{{ {'apiVersion': 1, 'groups': ns.groups} | to_nice_yaml(indent=2, width=4096) }}

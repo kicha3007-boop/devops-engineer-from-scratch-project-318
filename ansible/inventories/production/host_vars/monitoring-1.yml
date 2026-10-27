@@ -1,0 +1,4 @@
+---
+# Адреса ВМ мониторинга — из terraform output (monitoring_public_ip / monitoring_private_ip), хранятся в Vault
+ansible_host: "{{ vault_monitoring_public_ip }}"
+private_ip: "{{ vault_monitoring_private_ip }}"

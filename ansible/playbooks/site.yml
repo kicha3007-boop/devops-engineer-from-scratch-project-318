@@ -1,0 +1,8 @@
+---
+# Обе ВМ целиком: сначала мониторинг (Loki уже ждёт логи, когда стартует Promtail),
+# затем приложение. make deploy (облако) / make lab-deploy (локальный стенд).
+- name: ВМ мониторинга
+  ansible.builtin.import_playbook: monitoring.yml
+
+- name: ВМ приложения
+  ansible.builtin.import_playbook: app.yml

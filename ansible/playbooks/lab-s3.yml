@@ -1,0 +1,103 @@
+---
+# Только для локального стенда: аналог terraform/storage.tf — бакет в MinIO, политики и ключ
+# приложения. Запуск: make lab-s3 (выполняется в toolbox, к MinIO ходит клиентом mc).
+- name: Подготовить бакет S3 в MinIO
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lab_s3_alias: lab
+    lab_s3_policy_name: bulletins-app
+  environment:
+    MC_HOST_lab: "http://{{ vault_minio_root_user }}:{{ vault_minio_root_password }}@{{ app_s3_endpoint | urlsplit('netloc') }}"
+  tasks:
+    - name: Дождаться готовности MinIO
+      ansible.builtin.uri:
+        url: "{{ app_s3_endpoint }}/minio/health/ready"
+      register: lab_s3_health
+      until: lab_s3_health.status == 200
+      retries: 30
+      delay: 2
+
+    - name: Проверить, есть ли бакет
+      ansible.builtin.command: mc stat {{ lab_s3_alias }}/{{ app_s3_bucket }}
+      register: lab_s3_stat
+      changed_when: false
+      failed_when: false
+
+    - name: Создать бакет
+      ansible.builtin.command: mc mb {{ lab_s3_alias }}/{{ app_s3_bucket }}
+      when: lab_s3_stat.rc != 0
+      changed_when: true
+
+    # Рабочие файлы для mc внутри одноразового контейнера toolbox — на результат не влияют
+    - name: Разложить политики доступа
+      changed_when: false
+      ansible.builtin.copy:
+        dest: "/tmp/{{ item.name }}.json"
+        content: "{{ item.policy | to_nice_json }}"
+        mode: "0600"
+      loop:
+        # Приложению — только чтение и запись объектов своего бакета
+        - name: app-policy
+          policy:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+                Resource: ["arn:aws:s3:::{{ app_s3_bucket }}/*"]
+              - Effect: Allow
+                Action: ["s3:ListBucket", "s3:GetBucketLocation"]
+                Resource: ["arn:aws:s3:::{{ app_s3_bucket }}"]
+        # Анонимно — только чтение объектов (картинки в браузере через nginx /media/), без листинга
+        - name: anonymous-policy
+          policy:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Principal:
+                  AWS: ["*"]
+                Action: ["s3:GetObject"]
+                Resource: ["arn:aws:s3:::{{ app_s3_bucket }}/*"]
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Узнать текущую анонимную политику бакета
+      ansible.builtin.command: mc anonymous get-json {{ lab_s3_alias }}/{{ app_s3_bucket }}
+      register: lab_s3_anon
+      changed_when: false
+
+    - name: Разрешить анонимное чтение объектов
+      ansible.builtin.command: mc anonymous set-json /tmp/anonymous-policy.json {{ lab_s3_alias }}/{{ app_s3_bucket }}
+      when: "'s3:GetObject' not in lab_s3_anon.stdout"
+      changed_when: true
+
+    - name: Узнать политику приложения
+      ansible.builtin.command: mc admin policy info {{ lab_s3_alias }} {{ lab_s3_policy_name }}
+      register: lab_s3_policy
+      changed_when: false
+      failed_when: false
+
+    - name: Создать политику приложения
+      ansible.builtin.command: mc admin policy create {{ lab_s3_alias }} {{ lab_s3_policy_name }} /tmp/app-policy.json
+      when: lab_s3_policy.rc != 0
+      changed_when: true
+
+    - name: Узнать пользователя приложения
+      ansible.builtin.command: mc admin user info --json {{ lab_s3_alias }} {{ app_s3_access_key }}
+      register: lab_s3_user
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Создать пользователя приложения (ключ доступа из Vault)
+      ansible.builtin.command: mc admin user add {{ lab_s3_alias }} {{ app_s3_access_key }} {{ app_s3_secret_key }}
+      when: lab_s3_user.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: Выдать пользователю политику приложения
+      ansible.builtin.command: mc admin policy attach {{ lab_s3_alias }} {{ lab_s3_policy_name }} --user {{ app_s3_access_key }}
+      when: lab_s3_policy_name not in lab_s3_user.stdout
+      changed_when: true
+      no_log: true

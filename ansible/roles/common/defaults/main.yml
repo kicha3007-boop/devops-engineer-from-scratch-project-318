@@ -1,0 +1,10 @@
+---
+# Базовые пакеты сервера. python3-requests нужен модулям community.docker на сервере.
+common_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - acl
+  - python3-requests
+  - htop
+  - jq

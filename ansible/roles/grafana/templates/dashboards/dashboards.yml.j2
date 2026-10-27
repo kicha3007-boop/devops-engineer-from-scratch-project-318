@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# Дашборды — JSON-файлы из репозитория (ansible/roles/grafana/files/dashboards).
+# Правки через UI не сохраняются: дашборд меняется в репозитории и выкатывается make dashboards.
+apiVersion: 1
+
+providers:
+  - name: bulletins
+    orgId: 1
+    folder: {{ grafana_dashboards_folder }}
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards

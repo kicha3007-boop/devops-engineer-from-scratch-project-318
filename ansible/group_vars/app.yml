@@ -1,0 +1,24 @@
+---
+# Общие переменные ВМ приложения (группа app): приложение, nginx, агенты мониторинга.
+
+# --- Межсетевой экран: наружу только SSH и HTTP; метрики — только серверу мониторинга ---
+firewall_allowed_tcp_ports:
+  - 22
+  - 80
+firewall_restricted_tcp_ports:
+  - port: "{{ app_metrics_port }}"
+    from: "{{ monitoring_private_ips }}"
+  - port: "{{ node_exporter_port }}"
+    from: "{{ monitoring_private_ips }}"
+  - port: "{{ nginx_exporter_port }}"
+    from: "{{ monitoring_private_ips }}"
+
+# --- Nginx: management-порт с actuator и stub_status открыт только этим адресам ---
+nginx_metrics_port: "{{ app_metrics_port }}"
+nginx_metrics_allow: "{{ ['127.0.0.1'] + monitoring_private_ips }}"
+
+# --- Promtail: куда отправлять логи (Loki на ВМ мониторинга) ---
+promtail_loki_push_url: "http://{{ monitoring_private_ips | first }}:{{ loki_port }}/loki/api/v1/push"
+
+# --- nginx-prometheus-exporter читает stub_status с management-порта nginx ---
+nginx_exporter_scrape_uri: "http://127.0.0.1:{{ nginx_metrics_port }}/stub_status"

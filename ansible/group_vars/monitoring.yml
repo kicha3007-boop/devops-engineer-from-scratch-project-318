@@ -1,0 +1,73 @@
+---
+# Общие переменные ВМ мониторинга (группа monitoring): Prometheus, Grafana, Loki,
+# список таргетов и пороги алертов.
+
+# --- Docker-сеть, в которой живут Prometheus, Grafana и Loki ---
+monitoring_network: monitoring
+monitoring_network_subnet: 172.30.0.0/24
+
+# --- Межсетевой экран ---
+# Наружу — только SSH. Node Exporter этой ВМ опрашивает Prometheus из сети monitoring.
+# Порты контейнеров (Grafana 3000, Prometheus 9090, Loki 3100) Docker публикует в обход ufw:
+# снаружи их ограничивает группа безопасности (terraform/network.tf), на ВМ — адрес публикации.
+firewall_allowed_tcp_ports:
+  - 22
+firewall_restricted_tcp_ports:
+  - port: "{{ node_exporter_port }}"
+    from:
+      - "{{ monitoring_network_subnet }}"
+
+# --- Prometheus: таргеты строятся из инвентаря, добавить сервис — дописать сюда ---
+# hosts — группы инвентаря (адрес — private_ip хоста), static — адреса внутри сети monitoring
+prometheus_scrape_interval: 15s
+prometheus_retention_time: 15d
+prometheus_scrape_jobs:
+  - name: bulletins-app
+    metrics_path: /actuator/prometheus
+    hosts: "{{ groups['app'] }}"
+    port: "{{ app_metrics_port }}"
+  - name: node
+    hosts: "{{ groups['app'] + groups['monitoring'] }}"
+    port: "{{ node_exporter_port }}"
+  - name: nginx
+    hosts: "{{ groups['app'] }}"
+    port: "{{ nginx_exporter_port }}"
+  - name: prometheus
+    static:
+      - "localhost:{{ prometheus_port }}"
+  - name: grafana
+    static:
+      - "grafana:{{ grafana_port }}"
+  - name: loki
+    static:
+      - "loki:{{ loki_port }}"
+
+# --- Пороги алертов (Grafana Alerting и правила Prometheus берут их отсюда) ---
+alert_app_job: bulletins-app
+# Сколько минут цель может молчать, прежде чем сработает «нет метрик»
+alert_no_data_minutes: 5
+# Доля ответов 5xx от всех запросов приложения, %
+alert_5xx_ratio_percent: 5
+# Абсолютный минимум ответов 5xx в секунду, чтобы не будить на единичных ошибках
+alert_5xx_min_rps: 0.05
+# Строк access-лога nginx с кодом 5xx за 5 минут (алерт по логам Loki)
+alert_5xx_log_lines: 20
+# p95 времени ответа приложения, секунды
+alert_latency_p95_seconds: 1
+alert_cpu_percent: 85
+alert_memory_percent: 90
+alert_disk_percent: 85
+# Ошибок уровня ERROR в логах приложения за 5 минут (метрика logback_events_total)
+alert_app_errors_5m: 10
+# Активных соединений пула БД к максимуму, %
+alert_db_pool_percent: 90
+
+# --- Grafana ---
+grafana_admin_user: admin
+grafana_alert_folder: Bulletins
+# Как долго условие должно держаться до отправки письма (защита от кратких всплесков)
+grafana_alert_for_critical: 1m
+grafana_alert_for_warning: 5m
+
+# --- Loki ---
+loki_retention_period: 168h

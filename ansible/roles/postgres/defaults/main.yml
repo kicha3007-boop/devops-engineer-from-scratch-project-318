@@ -1,0 +1,15 @@
+---
+# PostgreSQL в контейнере на ВМ приложения (локальный стенд; в облаке — Managed PostgreSQL,
+# тогда роль не подключается: postgres_enabled: false).
+# Порт наружу не публикуется: контейнер подключён только к внутренней (internal)
+# docker-сети, куда кроме него входит лишь приложение.
+postgres_image: postgres:17-alpine
+postgres_container_name: bulletins-db
+postgres_network: bulletins-db
+postgres_volume: bulletins-pgdata
+postgres_db: bulletins
+postgres_user: bulletins
+# Пароль приходит из Ansible Vault (group_vars/all/vault.yml)
+postgres_password: ""
+# Сколько ждать готовности БД после старта (попытки по 3 секунды)
+postgres_wait_retries: 40

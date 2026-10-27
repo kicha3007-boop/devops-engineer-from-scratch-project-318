@@ -1,0 +1,48 @@
+---
+# Образ из реестра (собирается в GitHub Actions, на сервере не собирается).
+# Откат — деплой предыдущей сборки по её тегу: make deploy-app TAG=<git sha>
+app_image: ghcr.io/kicha3007-boop/devops-engineer-from-scratch-project-318
+app_image_tag: latest
+# false — не ходить в реестр, взять образ, уже загруженный на сервер (make lab-image)
+app_image_pull: true
+
+# Если пакет в реестре приватный — логин и токен (read:packages) из Vault
+app_registry: ghcr.io
+app_registry_username: ""
+app_registry_password: ""
+
+app_container_name: bulletins-app
+app_migrate_container_name: bulletins-migrate
+app_network: bulletins-app
+# Каталог приложения на сервере: env-файл и логи, переживающие пересоздание контейнера
+app_root: /opt/bulletins
+# UID пользователя внутри образа (см. Dockerfile) — владелец каталога логов
+app_container_uid: 10001
+
+# Порты публикуются только на 127.0.0.1: снаружи приложение доступно лишь через nginx.
+# Management-порт (actuator) внутри контейнера — 9090; на хосте он висит на
+# 127.0.0.1:19090, а порт 9090 ВМ занимает nginx и пускает к метрикам только мониторинг.
+app_bind_address: 127.0.0.1
+app_port: 8080
+app_management_port: 9090
+app_management_host_port: 19090
+app_java_opts: "-Xms256m -Xmx512m -XX:+ExitOnOutOfMemoryError"
+
+# База: контейнер роли postgres (postgres_enabled: true) или Managed PostgreSQL (app_db_url из инвентаря)
+app_postgres_enabled: "{{ postgres_enabled | default(true) }}"
+app_db_url: "jdbc:postgresql://{{ postgres_container_name | default('bulletins-db') }}:5432/{{ postgres_db }}"
+
+# Объектное хранилище S3 (ключи — из Vault)
+app_s3_bucket: bulletins
+app_s3_region: ru-central1
+app_s3_endpoint: https://storage.yandexcloud.net
+app_s3_access_key: ""
+app_s3_secret_key: ""
+# Публичный адрес картинок: nginx проксирует и кеширует /media/ из бакета
+app_s3_cdn_url: "http://localhost/media"
+
+# Метки для Promtail: логи контейнера (JSON в stdout) уходят в Loki с job=bulletins-app
+app_logging_job: bulletins-app
+
+# Сколько ждать, пока контейнер станет healthy (попытки по 5 секунд)
+app_wait_retries: 36

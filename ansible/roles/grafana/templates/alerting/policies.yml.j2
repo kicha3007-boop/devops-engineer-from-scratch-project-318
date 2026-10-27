@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# Политика уведомлений: все алерты — в один contact point, сгруппированные по сервису.
+# Критичные повторяются чаще, предупреждения — реже.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: {{ grafana_contact_point }}
+    group_by:
+      - grafana_folder
+      - alertname
+      - service
+    group_wait: 30s
+    group_interval: 1m
+    repeat_interval: 4h
+    routes:
+      - receiver: {{ grafana_contact_point }}
+        object_matchers:
+          - ["severity", "=", "critical"]
+        repeat_interval: 1h
+      - receiver: {{ grafana_contact_point }}
+        object_matchers:
+          - ["severity", "=", "warning"]
+        repeat_interval: 12h

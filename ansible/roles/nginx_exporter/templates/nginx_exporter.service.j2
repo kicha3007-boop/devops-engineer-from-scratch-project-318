@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+[Unit]
+Description=NGINX Prometheus Exporter
+Documentation=https://github.com/nginx/nginx-prometheus-exporter
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=simple
+User={{ nginx_exporter_user }}
+Group={{ nginx_exporter_user }}
+ExecStart={{ nginx_exporter_binary }} \
+    --nginx.scrape-uri={{ nginx_exporter_scrape_uri }} \
+    --web.listen-address={{ nginx_exporter_listen_address }}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

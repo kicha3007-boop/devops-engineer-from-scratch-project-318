@@ -1,0 +1,17 @@
+---
+# Prometheus в Docker на ВМ мониторинга: конфиг и правила — в каталоге на ВМ,
+# данные (TSDB) — в именованном томе
+prometheus_image: prom/prometheus:v3.15.1
+prometheus_container_name: prometheus
+prometheus_root: /opt/prometheus
+prometheus_data_volume: prometheus-data
+prometheus_port: 9090
+prometheus_bind_address: 0.0.0.0
+prometheus_scrape_interval: 15s
+prometheus_evaluation_interval: 15s
+prometheus_retention_time: 15d
+prometheus_docker_network: "{{ monitoring_network | default('monitoring') }}"
+prometheus_docker_network_subnet: "{{ monitoring_network_subnet | default('172.30.0.0/24') }}"
+
+# Таргеты: hosts — имена хостов инвентаря (адрес — их private_ip и port), static — готовые адреса
+prometheus_scrape_jobs: []

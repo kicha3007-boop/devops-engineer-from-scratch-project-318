@@ -1,0 +1,4 @@
+---
+# Адреса ВМ приложения — из terraform output (app_public_ip / app_private_ip), хранятся в Vault
+ansible_host: "{{ vault_app_public_ip }}"
+private_ip: "{{ vault_app_private_ip }}"

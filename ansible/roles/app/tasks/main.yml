@@ -1,0 +1,104 @@
+---
+- name: Создать каталог приложения
+  ansible.builtin.file:
+    path: "{{ app_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Создать каталог логов приложения
+  ansible.builtin.file:
+    path: "{{ app_root }}/logs"
+    state: directory
+    owner: "{{ app_container_uid }}"
+    group: "{{ app_container_uid }}"
+    mode: "0750"
+
+- name: Разложить переменные окружения приложения
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: "{{ app_root }}/app.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# В режиме --check на чистом сервере Docker ещё не установлен — сравнивать не с чем
+- name: Обновить приложение
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages
+  vars:
+    # С локальной БД — внутренняя сеть роли postgres; с Managed PostgreSQL — обычная сеть с выходом наружу
+    app_db_networks: "{{ [{'name': postgres_network | default('bulletins-db')}] if app_postgres_enabled | bool else [{'name': app_network}] }}"
+  block:
+    - name: Войти в реестр образов
+      community.docker.docker_login:
+        registry_url: "{{ app_registry }}"
+        username: "{{ app_registry_username }}"
+        password: "{{ app_registry_password }}"
+      when:
+        - app_image_pull | bool
+        - app_registry_username | length > 0
+      no_log: true
+
+    # Образ скачивается заранее, пока работает старая версия: простой — только перезапуск
+    - name: Скачать образ приложения
+      community.docker.docker_image_pull:
+        name: "{{ app_image }}"
+        tag: "{{ app_image_tag }}"
+        pull: always
+      when: app_image_pull | bool
+
+    - name: Создать сеть приложения
+      community.docker.docker_network:
+        name: "{{ app_network }}"
+
+    # Миграции — отдельным одноразовым контейнером из того же образа до старта сервиса:
+    # Spring Boot без веб-сервера применяет миграции Flyway, сверяет схему и завершается.
+    - name: Применить миграции БД
+      community.docker.docker_container:
+        name: "{{ app_migrate_container_name }}"
+        image: "{{ app_image }}:{{ app_image_tag }}"
+        detach: false
+        cleanup: true
+        output_logs: true
+        log_driver: json-file
+        env_file: "{{ app_root }}/app.env"
+        env:
+          SPRING_FLYWAY_ENABLED: "true"
+          SPRING_MAIN_WEBAPPLICATIONTYPE: none
+          APP_SEED_ENABLED: "false"
+        networks: "{{ app_db_networks }}"
+      register: app_migrate
+      changed_when: "'Successfully applied' in (app_migrate.container.Output | default(''))"
+
+    - name: Запустить контейнер приложения
+      community.docker.docker_container:
+        name: "{{ app_container_name }}"
+        image: "{{ app_image }}:{{ app_image_tag }}"
+        restart_policy: unless-stopped
+        env_file: "{{ app_root }}/app.env"
+        env:
+          SPRING_FLYWAY_ENABLED: "false"
+        ports:
+          - "{{ app_bind_address }}:{{ app_port }}:{{ app_port }}"
+          - "{{ app_bind_address }}:{{ app_management_host_port }}:{{ app_management_port }}"
+        volumes:
+          - "{{ app_root }}/logs:/app/logs"
+        networks: "{{ ([{'name': app_network}] + app_db_networks) | unique }}"
+        labels:
+          logging: promtail
+          logging_job: "{{ app_logging_job }}"
+        log_driver: json-file
+        log_options:
+          max-size: 20m
+          max-file: "5"
+
+    - name: Дождаться, пока приложение станет healthy
+      community.docker.docker_container_info:
+        name: "{{ app_container_name }}"
+      register: app_info
+      until: app_info.container.State.Health.Status | default('') == 'healthy'
+      retries: "{{ app_wait_retries }}"
+      delay: 5
+      when: not ansible_check_mode

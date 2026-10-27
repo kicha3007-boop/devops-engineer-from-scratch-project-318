@@ -1,0 +1,7 @@
+---
+- name: Перечитать конфигурацию Prometheus
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ prometheus_port }}/-/reload"
+    method: POST
+  listen: reload prometheus
+  when: not ansible_check_mode

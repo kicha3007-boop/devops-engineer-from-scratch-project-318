@@ -1,0 +1,12 @@
+---
+# Сторонние роли и коллекции Ansible. Установка: make install
+# (роли — в ~/.ansible/roles, коллекции — в ~/.ansible/collections)
+roles:
+  - name: geerlingguy.docker
+    version: 8.0.0
+
+collections:
+  - name: community.docker
+    version: ">=4.0.0,<6.0.0"
+  - name: community.general
+    version: ">=10.0.0,<14.0.0"

@@ -1,0 +1,97 @@
+---
+- name: Создать каталоги конфигурации Prometheus
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ prometheus_root }}"
+    - "{{ prometheus_root }}/rules"
+
+- name: Разложить prometheus.yml (таргеты из переменных)
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ prometheus_root }}/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload prometheus
+
+- name: Разложить правила алертинга
+  ansible.builtin.template:
+    src: alerts.yml.j2
+    dest: "{{ prometheus_root }}/rules/alerts.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload prometheus
+
+# В режиме --check на чистом сервере Docker ещё не установлен — сравнивать не с чем
+- name: Запустить Prometheus
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages
+  block:
+    # promtool из того же образа: проверяет синтаксис конфига и все подключённые правила.
+    # Падает раньше, чем Prometheus получит битую конфигурацию.
+    - name: Проверить конфигурацию утилитой promtool
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --network=none
+          - -v
+          - "{{ prometheus_root }}:/etc/prometheus:ro"
+          - --entrypoint
+          - promtool
+          - "{{ prometheus_image }}"
+          - check
+          - config
+          - /etc/prometheus/prometheus.yml
+      register: prometheus_promtool
+      changed_when: false
+      check_mode: false
+      failed_when: prometheus_promtool.rc != 0
+
+    - name: Создать docker-сеть мониторинга
+      community.docker.docker_network:
+        name: "{{ prometheus_docker_network }}"
+        ipam_config:
+          - subnet: "{{ prometheus_docker_network_subnet }}"
+
+    - name: Создать том для данных Prometheus
+      community.docker.docker_volume:
+        name: "{{ prometheus_data_volume }}"
+
+    - name: Запустить контейнер Prometheus
+      community.docker.docker_container:
+        name: "{{ prometheus_container_name }}"
+        image: "{{ prometheus_image }}"
+        restart_policy: unless-stopped
+        command:
+          - --config.file=/etc/prometheus/prometheus.yml
+          - --storage.tsdb.path=/prometheus
+          - --storage.tsdb.retention.time={{ prometheus_retention_time }}
+          # POST /-/reload — перечитать конфиг без перезапуска (handler роли)
+          - --web.enable-lifecycle
+        volumes:
+          - "{{ prometheus_root }}:/etc/prometheus:ro"
+          - "{{ prometheus_data_volume }}:/prometheus"
+        ports:
+          - "{{ prometheus_bind_address }}:{{ prometheus_port }}:9090"
+        networks:
+          - name: "{{ prometheus_docker_network }}"
+        log_driver: json-file
+        log_options:
+          max-size: 10m
+          max-file: "3"
+
+    - name: Дождаться готовности Prometheus
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ prometheus_port }}/-/ready"
+      register: prometheus_ready
+      until: prometheus_ready.status == 200
+      retries: 30
+      delay: 2
+      when: not ansible_check_mode

@@ -1,0 +1,59 @@
+---
+# ВМ в Yandex Cloud (terraform/). Здесь только то, чем облако отличается от стенда;
+# общие настройки — в ansible/group_vars/*.yml. Секреты — в vault.yml рядом (Ansible Vault).
+
+env_name: production
+
+# --- Подключение к ВМ (пользователь из cloud-init, см. terraform/compute.tf) ---
+ansible_user: "{{ vault_server_user }}"
+
+# --- Docker ---
+docker_daemon_options:
+  log-driver: json-file
+  log-opts:
+    max-size: 20m
+    max-file: "3"
+
+# --- Приложение (A-запись домена указывает на app_public_ip из terraform output) ---
+app_domain: bulletins.example.ru
+app_public_url: "http://{{ app_domain }}"
+app_image: ghcr.io/kicha3007-boop/devops-engineer-from-scratch-project-318
+# latest — последняя сборка main; откат — тег-sha нужной сборки (make deploy-app TAG=<sha>)
+app_image_tag: latest
+app_image_pull: true
+# Нужны, только если пакет в GHCR приватный
+app_registry_username: "{{ vault_app_registry_username | default('') }}"
+app_registry_password: "{{ vault_app_registry_password | default('') }}"
+
+# --- База данных: Managed Service for PostgreSQL (terraform/database.tf) ---
+postgres_enabled: false
+postgres_db: bulletins
+postgres_user: bulletins
+postgres_password: "{{ vault_postgres_password }}"
+# FQDN мастера кластера (terraform output db_host); порт 6432 — Odyssey, подключение только по TLS
+app_db_url: "jdbc:postgresql://{{ vault_db_host }}:6432/{{ postgres_db }}?sslmode=require"
+
+# --- Объектное хранилище: Yandex Object Storage (terraform/storage.tf) ---
+app_s3_endpoint: https://storage.yandexcloud.net
+app_s3_region: ru-central1
+app_s3_bucket: bulletins-318-kicha3007-boop
+app_s3_access_key: "{{ vault_s3_access_key }}"
+app_s3_secret_key: "{{ vault_s3_secret_key }}"
+app_s3_cdn_url: "{{ app_public_url }}/media"
+
+# --- Межсетевой экран ---
+firewall_enabled: true
+# Откуда пускать в Grafana/Prometheus (ufw; снаружи то же ограничивает группа безопасности)
+admin_cidrs: "{{ vault_admin_cidrs }}"
+
+# --- Grafana ---
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
+grafana_root_url: "http://{{ vault_monitoring_public_ip }}:3000/"
+# Почта алертов: SMTP Яндекс Почты с паролем приложения (id.yandex.ru → Пароли приложений)
+grafana_smtp_host: smtp.yandex.ru:587
+grafana_smtp_user: "{{ vault_smtp_user }}"
+grafana_smtp_password: "{{ vault_smtp_password }}"
+grafana_smtp_from: "{{ vault_smtp_user }}"
+grafana_smtp_starttls_policy: MandatoryStartTLS
+grafana_alert_email_to: "{{ vault_alert_email_to }}"
+grafana_rendering_server_url: ""

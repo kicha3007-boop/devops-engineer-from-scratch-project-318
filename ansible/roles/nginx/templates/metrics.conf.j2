@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+# Management-порт ВМ приложения: health и метрики Spring Actuator, stub_status nginx.
+# Доступ — только с адресов сервера мониторинга (и с самой ВМ); снаружи порт
+# дополнительно закрыт ufw и группой безопасности.
+server {
+    listen {{ nginx_metrics_port }};
+    listen [::]:{{ nginx_metrics_port }};
+    server_name _;
+
+    # Prometheus опрашивает порт каждые несколько секунд — в общий лог это не пишем
+    access_log off;
+    error_log {{ nginx_error_log }} warn;
+
+{% for address in nginx_metrics_allow %}
+    allow {{ address }};
+{% endfor %}
+    deny all;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+
+    # Метрики приложения (Micrometer, формат Prometheus)
+    location = /actuator/prometheus {
+        proxy_pass http://{{ nginx_actuator_upstream }};
+    }
+
+    # Health и пробы liveness/readiness
+    location ^~ /actuator/health {
+        proxy_pass http://{{ nginx_actuator_upstream }};
+    }
+
+    # Счётчики соединений и запросов nginx — их читает nginx-prometheus-exporter
+    location = {{ nginx_stub_status_path }} {
+        stub_status;
+    }
+
+    location / {
+        return 404;
+    }
+}

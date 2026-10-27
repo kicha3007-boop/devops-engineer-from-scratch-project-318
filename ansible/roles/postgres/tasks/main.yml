@@ -1,0 +1,50 @@
+---
+# В режиме --check на чистом сервере Docker ещё не установлен — сравнивать не с чем
+- name: Запустить PostgreSQL в контейнере
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages
+  block:
+    - name: Создать внутреннюю сеть БД (без выхода наружу)
+      community.docker.docker_network:
+        name: "{{ postgres_network }}"
+        internal: true
+
+    - name: Создать том для данных БД
+      community.docker.docker_volume:
+        name: "{{ postgres_volume }}"
+
+    - name: Запустить контейнер PostgreSQL
+      community.docker.docker_container:
+        name: "{{ postgres_container_name }}"
+        image: "{{ postgres_image }}"
+        restart_policy: unless-stopped
+        env:
+          POSTGRES_DB: "{{ postgres_db }}"
+          POSTGRES_USER: "{{ postgres_user }}"
+          POSTGRES_PASSWORD: "{{ postgres_password }}"
+        volumes:
+          - "{{ postgres_volume }}:/var/lib/postgresql/data"
+        networks:
+          - name: "{{ postgres_network }}"
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }} -d {{ postgres_db }}"]
+          interval: 5s
+          timeout: 3s
+          retries: 10
+        # Метки для Promtail: логи контейнера уходят в Loki с job=postgres
+        labels:
+          logging: promtail
+          logging_job: postgres
+        log_driver: json-file
+        log_options:
+          max-size: 10m
+          max-file: "3"
+      no_log: true
+
+    - name: Дождаться готовности PostgreSQL
+      community.docker.docker_container_info:
+        name: "{{ postgres_container_name }}"
+      register: postgres_info
+      until: postgres_info.container.State.Health.Status | default('') == 'healthy'
+      retries: "{{ postgres_wait_retries }}"
+      delay: 3
+      when: not ansible_check_mode

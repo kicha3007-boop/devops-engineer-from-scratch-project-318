@@ -1,0 +1,8 @@
+---
+- name: Перезапустить Loki
+  community.docker.docker_container:
+    name: "{{ loki_container_name }}"
+    state: started
+    restart: true
+  listen: restart loki
+  when: not ansible_check_mode

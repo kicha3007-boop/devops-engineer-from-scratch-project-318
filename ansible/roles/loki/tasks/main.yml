@@ -1,0 +1,59 @@
+---
+- name: Создать каталог конфигурации Loki
+  ansible.builtin.file:
+    path: "{{ loki_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Разложить конфигурацию Loki
+  ansible.builtin.template:
+    src: loki.yml.j2
+    dest: "{{ loki_root }}/loki.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart loki
+
+# В режиме --check на чистом сервере Docker ещё не установлен — сравнивать не с чем
+- name: Запустить Loki
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages
+  block:
+    - name: Создать docker-сеть мониторинга
+      community.docker.docker_network:
+        name: "{{ loki_docker_network }}"
+        ipam_config:
+          - subnet: "{{ loki_docker_network_subnet }}"
+
+    - name: Создать том для данных Loki
+      community.docker.docker_volume:
+        name: "{{ loki_data_volume }}"
+
+    - name: Запустить контейнер Loki
+      community.docker.docker_container:
+        name: "{{ loki_container_name }}"
+        image: "{{ loki_image }}"
+        restart_policy: unless-stopped
+        command:
+          - -config.file=/etc/loki/loki.yml
+        volumes:
+          - "{{ loki_root }}:/etc/loki:ro"
+          - "{{ loki_data_volume }}:/loki"
+        ports:
+          - "{{ loki_bind_address }}:{{ loki_port }}:3100"
+        networks:
+          - name: "{{ loki_docker_network }}"
+        log_driver: json-file
+        log_options:
+          max-size: 10m
+          max-file: "3"
+
+    - name: Дождаться готовности Loki
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ loki_port }}/ready"
+      register: loki_ready
+      until: loki_ready.status == 200
+      retries: 30
+      delay: 3
+      when: not ansible_check_mode

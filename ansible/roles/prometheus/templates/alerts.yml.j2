@@ -1,0 +1,114 @@
+# {{ ansible_managed }}
+# Правила алертинга Prometheus (видны на /alerts). Уведомления на почту отправляет
+# Grafana Alerting по тем же условиям — роль grafana. Пороги — ansible/group_vars/monitoring.yml.
+{% set app = 'job="' ~ alert_app_job ~ '"' %}
+groups:
+  - name: availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: {{ grafana_alert_for_critical }}
+        labels:
+          severity: critical
+          service: '{% raw %}{{ $labels.job }}{% endraw %}'
+        annotations:
+          summary: '{% raw %}Таргет {{ $labels.job }} ({{ $labels.instance }}) не отвечает{% endraw %}'
+
+      - alert: BulletinsAppDown
+        expr: up{ {{- app -}} } == 0 or absent(up{ {{- app -}} })
+        for: {{ grafana_alert_for_critical }}
+        labels:
+          severity: critical
+          service: {{ alert_app_job }}
+        annotations:
+          summary: Приложение не отдаёт метрики на management-порту (контейнер упал или не отвечает)
+
+      - alert: BulletinsNoMetrics
+        expr: absent_over_time(process_uptime_seconds{ {{- app -}} }[{{ alert_no_data_minutes }}m])
+        labels:
+          severity: critical
+          service: {{ alert_app_job }}
+        annotations:
+          summary: Метрик приложения нет дольше {{ alert_no_data_minutes }} минут
+
+      - alert: NginxDown
+        expr: nginx_up == 0
+        for: {{ grafana_alert_for_critical }}
+        labels:
+          severity: critical
+          service: nginx
+        annotations:
+          summary: nginx-prometheus-exporter не может прочитать stub_status
+
+  - name: application
+    rules:
+      - alert: BulletinsHigh5xx
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{ {{- app -}} ,status=~"5.."}[5m]))
+            / sum(rate(http_server_requests_seconds_count{ {{- app -}} }[5m])) * 100 > {{ alert_5xx_ratio_percent }}
+          )
+          and sum(rate(http_server_requests_seconds_count{ {{- app -}} ,status=~"5.."}[5m])) > {{ alert_5xx_min_rps }}
+        for: {{ grafana_alert_for_critical }}
+        labels:
+          severity: critical
+          service: {{ alert_app_job }}
+        annotations:
+          summary: 'Доля ответов 5xx выше {{ alert_5xx_ratio_percent }}%{% raw %}: {{ $value | printf "%.1f" }}%{% endraw %}'
+
+      - alert: BulletinsHighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{ {{- app -}} ,uri!~"/actuator.*"}[5m])))
+          > {{ alert_latency_p95_seconds }}
+        for: {{ grafana_alert_for_warning }}
+        labels:
+          severity: warning
+          service: {{ alert_app_job }}
+        annotations:
+          summary: p95 времени ответа выше {{ alert_latency_p95_seconds }} с
+
+      - alert: BulletinsErrorLogs
+        expr: sum(increase(logback_events_total{ {{- app -}} ,level="error"}[5m])) > {{ alert_app_errors_5m }}
+        labels:
+          severity: warning
+          service: {{ alert_app_job }}
+        annotations:
+          summary: Больше {{ alert_app_errors_5m }} ошибок ERROR в логах приложения за 5 минут
+
+      - alert: BulletinsDbPoolExhausted
+        expr: max(hikaricp_connections_active{ {{- app -}} } / hikaricp_connections_max{ {{- app -}} }) * 100 > {{ alert_db_pool_percent }}
+        for: {{ grafana_alert_for_warning }}
+        labels:
+          severity: warning
+          service: {{ alert_app_job }}
+        annotations:
+          summary: Пул соединений с БД занят больше чем на {{ alert_db_pool_percent }}%
+
+  - name: host
+    rules:
+      - alert: HostHighCpu
+        expr: 100 - avg by (host, instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100 > {{ alert_cpu_percent }}
+        for: {{ grafana_alert_for_warning }}
+        labels:
+          severity: warning
+          service: host
+        annotations:
+          summary: '{% raw %}CPU {{ $labels.host }} загружен на {{ $value | printf "%.0f" }}%{% endraw %}'
+
+      - alert: HostHighMemory
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > {{ alert_memory_percent }}
+        for: {{ grafana_alert_for_warning }}
+        labels:
+          severity: warning
+          service: host
+        annotations:
+          summary: '{% raw %}Память {{ $labels.host }} занята на {{ $value | printf "%.0f" }}%{% endraw %}'
+
+      - alert: HostDiskFull
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > {{ alert_disk_percent }}
+        for: {{ grafana_alert_for_warning }}
+        labels:
+          severity: warning
+          service: host
+        annotations:
+          summary: '{% raw %}Диск / на {{ $labels.host }} заполнен на {{ $value | printf "%.0f" }}%{% endraw %}'

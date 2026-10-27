@@ -1,0 +1,67 @@
+---
+# Локальный стенд (make lab-up). Здесь только то, чем стенд отличается от облака:
+# адреса, реестр образов, S3 (MinIO), почта (Mailpit), база (контейнер вместо Managed PostgreSQL).
+# Общие настройки обоих окружений — в ansible/group_vars/*.yml.
+# Секреты — в vault.yml рядом; его генерирует make lab-secrets (в git не попадает).
+
+# Лейбл env в логах (Loki) и метриках (Prometheus)
+env_name: lab
+
+# --- Подключение к «ВМ» по SSH (ключ генерируется make lab-up) ---
+ansible_user: ubuntu
+ansible_ssh_private_key_file: /lab-ssh/id_ed25519
+# «ВМ» пересоздаются вместе со стендом — их ключи хоста каждый раз новые
+ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+# --- Docker: образы Docker Hub через зеркало (Docker Hub из РФ часто недоступен) ---
+docker_daemon_options:
+  registry-mirrors:
+    - https://mirror.gcr.io
+  log-driver: json-file
+  log-opts:
+    max-size: 20m
+    max-file: "3"
+
+# --- Приложение ---
+app_domain: localhost
+app_public_url: http://localhost:38080
+app_image: ghcr.io/kicha3007-boop/devops-engineer-from-scratch-project-318
+app_image_tag: latest
+app_image_pull: true
+
+# --- База данных: контейнер PostgreSQL на ВМ приложения (в облаке — Managed PostgreSQL) ---
+postgres_enabled: true
+postgres_db: bulletins
+postgres_user: bulletins
+postgres_password: "{{ vault_postgres_password }}"
+
+# --- Объектное хранилище: MinIO в контейнере p318-minio (бакет создаёт make lab-s3) ---
+app_s3_endpoint: http://s3.p318.test:9000
+app_s3_region: us-east-1
+app_s3_bucket: bulletins
+app_s3_access_key: "{{ vault_s3_access_key }}"
+app_s3_secret_key: "{{ vault_s3_secret_key }}"
+app_s3_cdn_url: "{{ app_public_url }}/media"
+
+# --- Межсетевой экран (ufw внутри «ВМ» работает по-настоящему) ---
+firewall_enabled: true
+# Откуда пускать в Grafana и Prometheus (в облаке — ещё и группы безопасности)
+admin_cidrs:
+  - 0.0.0.0/0
+
+# --- Grafana ---
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
+grafana_root_url: http://localhost:38030/
+# Почта алертов: SMTP-ловушка Mailpit (p318-mailpit), письма видны на http://localhost:38025
+grafana_smtp_host: mailpit.p318.test:1025
+grafana_smtp_user: grafana@p318.test
+grafana_smtp_password: "{{ vault_smtp_password }}"
+grafana_smtp_from: grafana@p318.test
+grafana_smtp_starttls_policy: MandatoryStartTLS
+# У Mailpit самоподписанный сертификат — на стенде его не проверяем (в облаке проверка включена)
+grafana_smtp_skip_verify: true
+grafana_alert_email_to: ops@p318.test
+# Рендеринг панелей в PNG (скриншоты в assets/: make lab-screenshots) — контейнер p318-renderer
+grafana_rendering_server_url: http://renderer.p318.test:8081/render
+grafana_rendering_callback_url: http://10.38.0.20:3000/
+grafana_rendering_token: "{{ vault_grafana_renderer_token }}"

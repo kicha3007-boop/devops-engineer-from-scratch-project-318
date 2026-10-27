@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Prometheus Node Exporter
+Documentation=https://github.com/prometheus/node_exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ node_exporter_user }}
+Group={{ node_exporter_user }}
+ExecStart={{ node_exporter_binary }} \
+    --web.listen-address={{ node_exporter_listen_address }} \
+    --collector.systemd \
+    --collector.systemd.unit-include='({{ node_exporter_systemd_units | join('|') }})[.]service' \
+    --collector.processes \
+    --collector.filesystem.mount-points-exclude='{{ node_exporter_fs_mount_points_exclude }}'{% for arg in node_exporter_extra_args %} \
+    {{ arg }}{% endfor %}
+
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

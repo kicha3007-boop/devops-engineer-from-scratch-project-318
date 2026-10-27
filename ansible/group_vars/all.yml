@@ -1,0 +1,24 @@
+---
+# Общие переменные обоих окружений (production и lab) для всех ВМ.
+# Подключаются в плейбуках через vars_files; отличия окружений — в
+# inventories/<окружение>/group_vars/all/vars.yml (имена переменных не пересекаются).
+
+# Лейбл app в логах и метриках
+project_name: bulletins
+
+# Docker ставит geerlingguy.docker; в группу docker пользователей добавляет роль docker_access
+docker_users: []
+
+# --- Порты, по которым ВМ ходят друг к другу (одни и те же для ролей и для firewall) ---
+node_exporter_port: 9100
+nginx_exporter_port: 9113
+# Management-порт приложения: nginx на ВМ app отдаёт на нём /actuator/health,
+# /actuator/prometheus и /stub_status только серверу мониторинга
+app_metrics_port: 9090
+prometheus_port: 9090
+grafana_port: 3000
+loki_port: 3100
+
+# Внутренние адреса ВМ (private_ip задан в инвентаре)
+app_private_ips: "{{ groups['app'] | map('extract', hostvars, 'private_ip') | list }}"
+monitoring_private_ips: "{{ groups['monitoring'] | map('extract', hostvars, 'private_ip') | list }}"

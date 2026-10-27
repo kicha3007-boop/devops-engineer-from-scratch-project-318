@@ -1,0 +1,6 @@
+---
+# ansible-lint запускается из каталога ansible/ (make lint и автопроверка Хекслета)
+profile: production
+exclude_paths:
+  - tmp/
+  - .ansible/

@@ -1,0 +1,57 @@
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/bulletins}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  # Схема БД в prod меняется только миграциями Flyway (src/main/resources/db/migration).
+  # При деплое их применяет отдельный одноразовый контейнер, а основному сервису
+  # передаётся SPRING_FLYWAY_ENABLED=false — он лишь сверяет схему с сущностями.
+  flyway:
+    enabled: ${SPRING_FLYWAY_ENABLED:true}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  output:
+    ansi:
+      enabled: always
+  h2:
+    console:
+      enabled: false
+
+storage:
+  s3:
+    bucket: ${STORAGE_S3_BUCKET:}
+    region: ${STORAGE_S3_REGION:}
+    endpoint: ${STORAGE_S3_ENDPOINT:}
+    access-key: ${STORAGE_S3_ACCESSKEY:}
+    secret-key: ${STORAGE_S3_SECRETKEY:}
+    cdn-url: ${STORAGE_S3_CDNURL:}
+
+management:
+  server:
+    address: 0.0.0.0
+    port: ${MANAGEMENT_SERVER_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,logfile
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${SPRING_PROFILES_ACTIVE:prod}
+    distribution:
+      percentiles-histogram:
+        http:
+          server:
+            requests: true

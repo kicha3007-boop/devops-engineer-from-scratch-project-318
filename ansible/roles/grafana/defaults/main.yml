@@ -1,0 +1,47 @@
+---
+# Grafana в Docker на ВМ мониторинга. Datasource'ы, дашборды, правила алертинга и
+# contact point описаны файлами provisioning в репозитории; данные (SQLite) — в томе.
+grafana_image: grafana/grafana:13.2.5
+grafana_container_name: grafana
+grafana_root: /opt/grafana
+grafana_data_volume: grafana-data
+grafana_port: 3000
+grafana_bind_address: 0.0.0.0
+grafana_root_url: "http://localhost:{{ grafana_port }}/"
+grafana_docker_network: "{{ monitoring_network | default('monitoring') }}"
+grafana_docker_network_subnet: "{{ monitoring_network_subnet | default('172.30.0.0/24') }}"
+
+# Учётная запись администратора (пароль — из Vault; применяется при первом запуске)
+grafana_admin_user: admin
+grafana_admin_password: ""
+
+# Datasource'ы: адреса внутри docker-сети monitoring
+grafana_prometheus_url: "http://{{ prometheus_container_name | default('prometheus') }}:9090"
+grafana_loki_url: "http://{{ loki_container_name | default('loki') }}:3100"
+
+# Почта для алертов (SMTP); пароль — из Vault
+grafana_smtp_host: ""
+grafana_smtp_user: ""
+grafana_smtp_password: ""
+grafana_smtp_from: grafana@example.com
+grafana_smtp_from_name: Grafana Bulletins
+# NoStartTLS | OpportunisticStartTLS | MandatoryStartTLS
+grafana_smtp_starttls_policy: MandatoryStartTLS
+grafana_smtp_skip_verify: false
+grafana_alert_email_to: ops@example.com
+grafana_contact_point: email-ops
+
+# Рендеринг панелей в картинки (отдельный сервис grafana-image-renderer); пусто — выключен
+grafana_rendering_server_url: ""
+grafana_rendering_callback_url: ""
+grafana_rendering_token: ""
+
+# Алерты: папка, интервал проверки, сколько условие должно держаться (for)
+grafana_alert_folder: Bulletins
+grafana_alert_interval: 30s
+grafana_alert_for_critical: 1m
+grafana_alert_for_warning: 5m
+
+# Папка дашбордов (JSON из files/dashboards) и сколько ждать готовности Grafana
+grafana_dashboards_folder: Bulletins
+grafana_wait_retries: 40

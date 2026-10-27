@@ -1,0 +1,70 @@
+---
+- name: Создать системного пользователя nginx-prometheus-exporter
+  ansible.builtin.user:
+    name: "{{ nginx_exporter_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Узнать установленную версию nginx-prometheus-exporter
+  ansible.builtin.command: "{{ nginx_exporter_binary }} --version"
+  register: nginx_exporter_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Скачивание — только если нужной версии ещё нет; в режиме --check шаг пропускается
+- name: Установить nginx-prometheus-exporter {{ nginx_exporter_version }}
+  when:
+    - ('version ' ~ nginx_exporter_version) not in (nginx_exporter_installed.stdout | default('')) ~ (nginx_exporter_installed.stderr | default(''))
+    - not ansible_check_mode
+  block:
+    - name: Скачать архив nginx-prometheus-exporter (с проверкой sha256)
+      ansible.builtin.get_url:
+        url: "{{ nginx_exporter_download_url }}/{{ nginx_exporter_release }}.tar.gz"
+        dest: "/tmp/{{ nginx_exporter_release }}.tar.gz"
+        checksum: "sha256:{{ nginx_exporter_download_url }}/nginx-prometheus-exporter_{{ nginx_exporter_version }}_checksums.txt"
+        mode: "0644"
+      register: nginx_exporter_download
+      until: nginx_exporter_download is succeeded
+      retries: 3
+      delay: 5
+
+    - name: Создать каталог для распаковки
+      ansible.builtin.file:
+        path: "/tmp/{{ nginx_exporter_release }}"
+        state: directory
+        mode: "0755"
+
+    - name: Распаковать архив nginx-prometheus-exporter
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ nginx_exporter_release }}.tar.gz"
+        dest: "/tmp/{{ nginx_exporter_release }}"
+        remote_src: true
+
+    - name: Установить бинарник nginx-prometheus-exporter
+      ansible.builtin.copy:
+        src: "/tmp/{{ nginx_exporter_release }}/nginx-prometheus-exporter"
+        dest: "{{ nginx_exporter_binary }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: restart nginx_exporter
+
+- name: Разложить systemd-юнит nginx-prometheus-exporter
+  ansible.builtin.template:
+    src: nginx_exporter.service.j2
+    dest: /etc/systemd/system/nginx_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart nginx_exporter
+
+- name: Запустить nginx-prometheus-exporter и включить автозапуск
+  ansible.builtin.systemd_service:
+    name: nginx_exporter
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode or nginx_exporter_installed.rc == 0

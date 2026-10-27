@@ -1,0 +1,61 @@
+---
+logging:
+  level:
+    root: INFO
+    org.springframework.boot: INFO
+    org.springframework.web: DEBUG
+    io.hexlet.project_devops_deploy: DEBUG
+
+spring:
+  profiles:
+    default: dev
+  application:
+    name: bulletins
+  datasource:
+    url: jdbc:h2:mem:bulletins;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  # В dev-профиле (H2 в памяти) схему создаёт Hibernate, миграции Flyway
+  # включаются только в prod (см. application-prod.yml)
+  flyway:
+    enabled: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  output:
+    ansi:
+      enabled: always
+
+server:
+  address: 0.0.0.0
+
+management:
+  server:
+    address: 0.0.0.0
+    port: ${MANAGEMENT_SERVER_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,logfile
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${SPRING_PROFILES_ACTIVE:dev}
+    distribution:
+      percentiles-histogram:
+        http:
+          server:
+            requests: true

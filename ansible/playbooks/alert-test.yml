@@ -1,0 +1,76 @@
+---
+# Ручная проверка алертинга (make alert-test SCENARIO=...):
+#   errors   — поток запросов, на которые приложение отвечает 500 (сортировка по несуществующему
+#              полю): срабатывают «Рост ответов 5xx приложения» и «Всплеск 5xx в логах nginx»;
+#   app-down — контейнер приложения останавливается на alert_test_duration секунд:
+#              срабатывает «Приложение недоступно», после запуска приходит письмо «Resolved».
+- name: Задёргать алерт
+  hosts: app
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/app.yml
+  vars:
+    alert_test_scenario: errors
+    alert_test_duration: 180
+    alert_test_url: "http://127.0.0.1/api/bulletins?sort=noSuchField"
+  tasks:
+    - name: Проверить сценарий
+      ansible.builtin.assert:
+        that: alert_test_scenario in ['errors', 'app-down']
+        fail_msg: "SCENARIO=errors или SCENARIO=app-down"
+        quiet: true
+
+    - name: Сценарий errors — поток ответов 5xx
+      when: alert_test_scenario == 'errors'
+      block:
+        - name: Убедиться, что запрос возвращает 500
+          ansible.builtin.uri:
+            url: "{{ alert_test_url }}"
+            status_code: 500
+
+        - name: Слать по 5 запросов в секунду, секунд — {{ alert_test_duration }}
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              end=$(( $(date +%s) + {{ alert_test_duration }} ))
+              while [ "$(date +%s)" -lt "$end" ]; do
+                for i in 1 2 3 4 5; do
+                  curl -s -o /dev/null -w '%{http_code}\n' '{{ alert_test_url }}' &
+                done
+                wait
+                sleep 1
+              done | sort | uniq -c
+            executable: /bin/bash
+          register: alert_test_errors
+          changed_when: true
+
+        - name: Ответов по кодам
+          ansible.builtin.debug:
+            msg: "{{ alert_test_errors.stdout_lines }}"
+
+    - name: Сценарий app-down — остановить приложение
+      when: alert_test_scenario == 'app-down'
+      block:
+        # Именно docker stop/start: модуль docker_container без полного описания пересоздал бы контейнер
+        - name: Остановить контейнер приложения
+          ansible.builtin.command: docker stop {{ app_container_name | default('bulletins-app') }}
+          changed_when: true
+
+        - name: Подождать, пока сработает алерт (1–2 минуты), секунд — {{ alert_test_duration }}
+          ansible.builtin.pause:
+            seconds: "{{ alert_test_duration }}"
+
+      always:
+        - name: Запустить контейнер приложения обратно
+          ansible.builtin.command: docker start {{ app_container_name | default('bulletins-app') }}
+          changed_when: true
+
+        - name: Дождаться, пока приложение станет healthy
+          community.docker.docker_container_info:
+            name: "{{ app_container_name | default('bulletins-app') }}"
+          register: alert_test_info
+          until: alert_test_info.container.State.Health.Status | default('') == 'healthy'
+          retries: 36
+          delay: 5

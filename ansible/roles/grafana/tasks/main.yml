@@ -1,0 +1,104 @@
+---
+- name: Создать каталоги Grafana (provisioning и дашборды)
+  ansible.builtin.file:
+    path: "{{ grafana_root }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - provisioning/datasources
+    - provisioning/dashboards
+    - provisioning/alerting
+    - provisioning/plugins
+    - dashboards
+
+- name: Разложить переменные окружения Grafana (пароль admin, SMTP)
+  ansible.builtin.template:
+    src: grafana.env.j2
+    dest: "{{ grafana_root }}/grafana.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Разложить datasource'ы и провайдер дашбордов
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ grafana_root }}/provisioning/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - datasources/datasources.yml
+    - dashboards/dashboards.yml
+  notify: restart grafana
+
+- name: Разложить алертинг (contact point, политика уведомлений, правила)
+  ansible.builtin.template:
+    src: "alerting/{{ item }}.j2"
+    dest: "{{ grafana_root }}/provisioning/alerting/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - contact-points.yml
+    - policies.yml
+    - rules.yml
+  notify: restart grafana
+
+# Дашборды Grafana подхватывает сама (провайдер перечитывает каталог), перезапуск не нужен
+- name: Разложить дашборды (JSON)
+  ansible.builtin.copy:
+    src: dashboards/
+    dest: "{{ grafana_root }}/dashboards/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+# В режиме --check на чистом сервере Docker ещё не установлен — сравнивать не с чем
+- name: Запустить Grafana
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages
+  block:
+    - name: Создать docker-сеть мониторинга
+      community.docker.docker_network:
+        name: "{{ grafana_docker_network }}"
+        ipam_config:
+          - subnet: "{{ grafana_docker_network_subnet }}"
+
+    - name: Создать том для данных Grafana
+      community.docker.docker_volume:
+        name: "{{ grafana_data_volume }}"
+
+    # env-файл с секретами лежит на ВМ; при его изменении модуль пересоздаёт контейнер
+    - name: Запустить контейнер Grafana
+      community.docker.docker_container:
+        name: "{{ grafana_container_name }}"
+        image: "{{ grafana_image }}"
+        restart_policy: unless-stopped
+        env_file: "{{ grafana_root }}/grafana.env"
+        volumes:
+          - "{{ grafana_data_volume }}:/var/lib/grafana"
+          - "{{ grafana_root }}/provisioning:/etc/grafana/provisioning:ro"
+          - "{{ grafana_root }}/dashboards:/etc/grafana/dashboards:ro"
+        ports:
+          - "{{ grafana_bind_address }}:{{ grafana_port }}:3000"
+        networks:
+          - name: "{{ grafana_docker_network }}"
+        log_driver: json-file
+        log_options:
+          max-size: 10m
+          max-file: "3"
+
+    - name: Применить изменения provisioning сразу
+      ansible.builtin.meta: flush_handlers
+
+    - name: Дождаться готовности Grafana
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ grafana_port }}/api/health"
+      register: grafana_health
+      until: grafana_health.status == 200
+      retries: "{{ grafana_wait_retries }}"
+      delay: 3
+      when: not ansible_check_mode

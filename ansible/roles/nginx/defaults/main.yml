@@ -1,0 +1,21 @@
+---
+# Сайт приложения: reverse proxy на контейнер, кеш статики и картинок из S3
+nginx_site_name: bulletins
+nginx_server_name: "{{ app_domain | default('_') }}"
+nginx_client_max_body_size: 10m
+nginx_cache_dir: /var/cache/nginx/bulletins
+nginx_app_upstream: "127.0.0.1:{{ app_port | default(8080) }}"
+# Откуда nginx берёт картинки для /media/: бакет S3 (path-style адрес)
+nginx_media_upstream: "{{ app_s3_endpoint }}/{{ app_s3_bucket }}/"
+
+# Логи в JSON (формат bulletins_json) — их читает Promtail. Формат error_log в nginx
+# не настраивается, его строки Promtail разбирает регулярным выражением.
+nginx_access_log: "/var/log/nginx/{{ nginx_site_name }}.access.log"
+nginx_error_log: "/var/log/nginx/{{ nginx_site_name }}.error.log"
+
+# Management-порт: actuator приложения и stub_status — только для перечисленных адресов
+nginx_metrics_port: 9090
+nginx_metrics_allow:
+  - 127.0.0.1
+nginx_actuator_upstream: "127.0.0.1:{{ app_management_host_port | default(19090) }}"
+nginx_stub_status_path: /stub_status

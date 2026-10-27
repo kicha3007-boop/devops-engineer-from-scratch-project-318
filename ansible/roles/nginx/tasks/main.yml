@@ -1,0 +1,64 @@
+---
+- name: Установить nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+  register: nginx_apt
+  until: nginx_apt is succeeded
+  retries: 3
+  delay: 10
+
+- name: Настроить nginx
+  when: not ansible_check_mode or 'nginx' in ansible_facts.packages
+  block:
+    - name: Спрятать версию nginx
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^\s*#?\s*server_tokens\s'
+        line: "\tserver_tokens off;"
+      notify: reload nginx
+
+    - name: Убрать сайт-заглушку nginx
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: reload nginx
+
+    - name: Создать каталог кеша nginx
+      ansible.builtin.file:
+        path: "{{ nginx_cache_dir }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0750"
+
+    - name: Разложить конфигурацию сайтов (приложение и management-порт)
+      ansible.builtin.template:
+        src: "{{ item }}.conf.j2"
+        dest: "/etc/nginx/sites-available/{{ nginx_site_name }}-{{ item }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - site
+        - metrics
+      notify: reload nginx
+
+    - name: Включить сайты
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ nginx_site_name }}-{{ item }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ nginx_site_name }}-{{ item }}.conf"
+        state: link
+      loop:
+        - site
+        - metrics
+      notify: reload nginx
+
+    - name: Запустить nginx и включить автозапуск
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Применить изменения конфигурации сразу
+      ansible.builtin.meta: flush_handlers

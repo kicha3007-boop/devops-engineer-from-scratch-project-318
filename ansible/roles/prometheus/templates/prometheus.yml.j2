@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+# Таргеты берутся из переменной prometheus_scrape_jobs (ansible/group_vars/monitoring.yml)
+global:
+  scrape_interval: {{ prometheus_scrape_interval }}
+  evaluation_interval: {{ prometheus_evaluation_interval }}
+  external_labels:
+    env: {{ env_name | default('production') }}
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+{% for job in prometheus_scrape_jobs %}
+  - job_name: {{ job.name }}
+    metrics_path: {{ job.metrics_path | default('/metrics') }}
+{% if job.scrape_interval is defined %}
+    scrape_interval: {{ job.scrape_interval }}
+{% endif %}
+    static_configs:
+{% for host in job.hosts | default([]) %}
+      - targets: ["{{ hostvars[host].private_ip }}:{{ job.port }}"]
+        labels:
+          host: {{ host }}
+{% endfor %}
+{% for target in job.static | default([]) %}
+      - targets: ["{{ target }}"]
+        labels:
+          host: {{ inventory_hostname }}
+{% endfor %}
+{% endfor %}

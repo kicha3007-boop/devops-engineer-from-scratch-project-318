@@ -1,0 +1,55 @@
+---
+# ВМ приложения (группа app): Docker, ufw, PostgreSQL (на стенде), приложение, nginx,
+# Node Exporter, nginx-prometheus-exporter и Promtail.
+#   make deploy-app                      — эта ВМ целиком
+#   make deploy-app TAGS=app TAG=<sha>   — только (пере)деплой приложения нужной сборки
+- name: Развернуть ВМ приложения
+  hosts: app
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/app.yml
+
+  pre_tasks:
+    # Список установленных пакетов: в режиме --check на чистом сервере задачи,
+    # которым нужен ещё не установленный пакет (docker, nginx, ufw), пропускаются
+    - name: Собрать список установленных пакетов
+      ansible.builtin.package_facts:
+      tags: [always]
+
+    - name: Проверить, что секреты из Ansible Vault подключены
+      ansible.builtin.assert:
+        that:
+          - postgres_password | length > 0
+          - app_s3_access_key | length > 0
+          - app_s3_secret_key | length > 0
+          - private_ip | default('') | length > 0
+        fail_msg: >-
+          Не заданы секреты: нужен group_vars/all/vault.yml в каталоге инвентаря
+          (шаблон — ansible/inventories/vault.yml.example) и файл пароля .vault_pass, см. README.
+        quiet: true
+      when: not ansible_check_mode
+      tags: [always]
+
+  roles:
+    - role: common
+      tags: [server, common]
+    - role: geerlingguy.docker
+      tags: [server, docker]
+    - role: docker_access
+      tags: [server, docker]
+    - role: firewall
+      tags: [server, firewall]
+    - role: node_exporter
+      tags: [agents, node_exporter]
+    - role: postgres
+      tags: [app, postgres]
+      when: postgres_enabled | bool
+    - role: app
+      tags: [app]
+    - role: nginx
+      tags: [web, nginx]
+    - role: nginx_exporter
+      tags: [agents, nginx_exporter]
+    - role: promtail
+      tags: [agents, promtail]

@@ -1,0 +1,6 @@
+# cp terraform/terraform.tfvars.example terraform/terraform.tfvars (в git не попадает)
+# Пароль БД — через окружение: export TF_VAR_db_password=... (тот же, что vault_postgres_password)
+folder_id      = "b1g..."
+ssh_public_key = "ssh-ed25519 AAAA... you@host"
+admin_cidrs    = ["198.51.100.7/32"]
+# dns_zone     = "example.ru"

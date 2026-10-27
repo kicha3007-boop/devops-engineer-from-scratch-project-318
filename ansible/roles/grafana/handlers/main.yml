@@ -1,0 +1,9 @@
+---
+# Datasource'ы и алертинг из provisioning Grafana читает при старте
+- name: Перезапустить Grafana
+  community.docker.docker_container:
+    name: "{{ grafana_container_name }}"
+    state: started
+    restart: true
+  listen: restart grafana
+  when: not ansible_check_mode
