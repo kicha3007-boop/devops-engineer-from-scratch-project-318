@@ -79,7 +79,10 @@ flowchart LR
 
 Всё на локальном стенде (`make lab-up && make lab-deploy`), команды и их вывод:
 
-- **Деплой и идемпотентность**: `make lab-deploy` без ошибок, повторный прогон — `changed=0` на обеих ВМ (`app-1: ok=57 changed=0`, `monitoring-1: ok=54 changed=0`).
+- **С нуля** (`make lab-down && make lab-up && make lab-deploy`, образ `latest` из GHCR, собранный CI):
+  первый прогон — `app-1: ok=71 changed=46 failed=0`, повторный `make lab-deploy` —
+  `app-1: ok=58 changed=0`, `monitoring-1: ok=54 changed=0`. (Первые попытки обрывались на 502 от
+  `archive.ubuntu.com` при установке Docker — это сбой зеркала, повторный запуск продолжает с места.)
 - **`make lab-test`** (ping, сервисы, контейнеры, эндпоинты, promtool, таргеты, Loki, Grafana) — `failed=0`,
   в том числе после `make lab-reboot` (обе «ВМ» перезагружены, всё поднялось само). Выдержки:
 
